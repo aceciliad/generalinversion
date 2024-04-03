@@ -10,13 +10,14 @@
 # - FM: compute forward model
 # - FM_AR
 # - FM_RF
+# - FM_NM
 # - INV: inversion module
 #==========================================================================
 
 import numpy as np
 import os, csv, sys, glob, copy
 from depthloop.perplex import depth_loop
-from coreeos.outercore import outercore
+from coreeos.outercore import outercore:
 from obspy.core import read, Stream, Trace
 from obspy.taup import taup_create, TauPyModel
 from rf import deconvolve
