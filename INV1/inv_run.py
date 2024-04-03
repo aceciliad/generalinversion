@@ -22,9 +22,16 @@ from obspy.taup import taup_create, TauPyModel
 from rf import deconvolve
 from scipy.integrate import solve_ivp
 from scipy.optimize import minimize, root_scalar
-from mypackage import myfunctions as mf
+#from mypackage import myfunctions as mf
 from multiprocessing import Pool
 from scipy.interpolate import interp1d
+from specnm_lsl import rayleigh_fg
+
+from pebble import ProcessPool, concurrent
+from concurrent.futures import TimeoutError
+import resource
+from threadpoolctl import threadpool_limits
+
 
 import warnings
 warnings.filterwarnings("ignore", message="using Voigt average")
@@ -1039,6 +1046,86 @@ class FM_AR(FM):
         return
 
 #=========================================================================
+class FM_NM(FM):
+    '''
+    forward model for computing normal modes employing SPECNM
+    '''
+
+    def __init__(self):
+        FM.__init__(self)
+        if self.ier:
+            return
+        self.get_freqs()
+        return
+   
+    def get_freqs(self):
+        future  = self.compute_frequencies()
+
+        try:
+            ray_out = future.result()
+        except TimeoutError:
+            future.cancel()
+            self.ier    = True
+            print('     > skip model')
+            return
+        except (MemoryError, Exception):
+            self.ier    = True
+            print('     > skip model')
+            return
+
+        self.mode    = 'Rayleigh'
+        self.modes_array    = {self.mode:{}}
+
+        mode_type   = [key for key in self.modes_array.keys()]
+
+
+        l_unique= np.unique(ray_out['angular orders'])
+
+        for ll, ang in enumerate(l_unique):
+
+            freqs   = ray_out['frequencies'][ray_out['angular orders']==ang]
+
+            for overtone, freq in enumerate(freqs):
+                if ang==1:  # for these specific models we don't get (0,1) and counting
+                    overtone    +=1 # needs to be corrected
+
+                mode_id = (overtone,ang)
+                #if mode_id not in self.nm_obs:
+                #    continue
+
+                self.modes_array[self.mode].update({mode_id:freq*1.e3})
+
+        #print(self.modes_array[self.mode])
+        return
+
+    @concurrent.process(timeout=300)
+    def compute_frequencies(self,*,
+                           fmax=0.005,
+                           fmin=1.2e-3,
+                           lmax=100,
+                           att='eigenvector continuation stepwise',
+                           maxmemory=6.0e9):
+
+        # set memory limit for mp purposes
+        resource.setrlimit(resource.RLIMIT_AS, (int(maxmemory), int(maxmemory)))
+
+        file_model  = os.path.join(self.tmp, self.file_tmp.format('.bm'))
+
+        with threadpool_limits(limits=1, user_api='blas'):
+
+            print(' Run specnm')
+            ray = rayleigh_fg(model=file_model,
+                              fmax=3*fmax)
+
+            ray_out = ray.rayleigh_problem(attenuation_mode=att,
+                                           #llist=self.list_ll,
+                                           fmin=fmin, fmax=fmax,
+                                           lmax=lmax)
+        return ray_out
+
+
+
+#=========================================================================
 
 class FM_RF(FM_AR):
     '''
@@ -1123,7 +1210,7 @@ class FM_RF(FM_AR):
         nextr   = prms_ref.nextr
         perc    = prms_ref.perc
 
-        depth_near, layer_source = mf.find_nearest(z, zs)
+        depth_near, layer_source = find_nearest(z, zs)
 
         l2  = l2.format(layer_source)
         fu  = freq[0]
@@ -1272,7 +1359,7 @@ class FM_RF(FM_AR):
         nextr   = prms_ref.nextr
         perc    = prms_ref.perc
 
-        depth_near, layer_source = mf.find_nearest(z, zs)
+        depth_near, layer_source = find_nearest(z, zs)
 
         l2  = l2.format(layer_source)
         fu  = freq[0]
@@ -1495,7 +1582,7 @@ class FM_RF(FM_AR):
 
         for st in stream:
             tt = st.times()
-            ttval, idx_cut = mf.find_nearest(tt, self.arrival_pert[self.idx_RFps[nrf],idx_pha]-5)
+            ttval, idx_cut = find_nearest(tt, self.arrival_pert[self.idx_RFps[nrf],idx_pha]-5)
             st.data[:idx_cut] = 0
 
         t_mother    = reftime + self.arrival_pert[self.idx_RFps[nrf],idx_pha]
@@ -1565,7 +1652,7 @@ class FM_RF(FM_AR):
         idx_p     = self.phases_obs.index(self.motherps)
         for st in stream:
             tt = st.times()
-            ttval, idx_cut = mf.find_nearest(tt, self.arrival_pert[self.idx_RFsp[nrf],idx_p]-5)
+            ttval, idx_cut = find_nearest(tt, self.arrival_pert[self.idx_RFsp[nrf],idx_p]-5)
             st.data[:idx_cut] = 0
 
         t_mother    = reftime + self.arrival_pert[self.idx_RFsp[nrf],idx_pha]
