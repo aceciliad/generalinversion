@@ -1,0 +1,8 @@
+
+
+#!/usr/bin/env bash
+
+for d in ./*/ ;
+do (cd "$d" && bsub -n 2 -W 120:00 -J "DW1" 'python inv_run.py');
+done
+

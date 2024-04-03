@@ -1,0 +1,8 @@
+
+
+#!/usr/bin/env bash
+
+for d in ./*/ ;
+do (cd "$d" && sbatch < submit_job);
+done
+
